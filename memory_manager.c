@@ -10,11 +10,11 @@ typedef struct Memory_Block
     struct Memory_Block* next; // Pointer to the next block
 } Memory_Block;
 
-void* memory_pool = NULL;        // Pool for actual data
-void* block_pool = NULL;         // Pool for Memory_Block metadata
+void* memory_pool = NULL;        
+void* md_pool = NULL;         
 Memory_Block* free_memory_list = NULL;  // Pointer to free memory blocks
 size_t memory_left = 0;          // Memory left in the memory pool
-size_t block_pool_left = 0;      // Blocks left in the block pool
+size_t md_pool_left = 0;      // Blocks left in the block pool
 
 // Initialize with total size of memory pool
 void mem_init(size_t size) 
@@ -27,93 +27,82 @@ void mem_init(size_t size)
 
     // Allocate memory pools
     memory_pool = malloc(size);
-    block_pool = malloc(1000 * sizeof(Memory_Block));  // Block pool for 1000 Memory_Block structures
+    md_pool = malloc(1000 * sizeof(Memory_Block));
     
-    if (memory_pool == NULL || block_pool == NULL) 
+    if (memory_pool == NULL || md_pool == NULL) 
     {
-        printf("Failed to allocate memory pool or block pool (mem_init)\n");
+        printf("Failed to allocate memory pool or block pool\n");
         return;
     }
 
-    // Set the first block from the memory pool
-    free_memory_list = (Memory_Block*) block_pool;  // Use block pool for metadata
-    free_memory_list->size = size; // Entire memory pool is free initially
+    // Initialize first metadata block to track entire memory pool
+    free_memory_list = (Memory_Block*)md_pool;
+    free_memory_list->size = size;
     free_memory_list->free = 1;
     free_memory_list->next = NULL;
 
+    // Set initial state
     memory_left = size;
-    block_pool_left = 1000;  // Start with space for 1000 blocks in the block pool
+    md_pool_left = (Memory_Block*)((char*)md_pool + sizeof(Memory_Block)); // Point to next available metadata block
 }
 
-// Helper function to allocate a new block from block pool
-Memory_Block* get_new_block() 
-{
-    if (block_pool_left == 0) 
-    {
-        printf("No more blocks available in the block pool\n");
-        return NULL;
-    }
-
-    // Allocate from the block pool
-    Memory_Block* new_block = (Memory_Block*)((char*)block_pool + (1000 - block_pool_left) * sizeof(Memory_Block));
-    block_pool_left--;
-
-    return new_block;
-}
-
-// Allocate memory from the pool
 void* mem_alloc(size_t size) 
 {
-    if (size == 0) 
+    if (size == 0 || memory_left < size) 
     {
         return NULL;
     }
 
-    if (memory_left < size) 
+    if (md_pool_left >= (Memory_Block*)((char*)md_pool + 1000 * sizeof(Memory_Block))) 
     {
-        printf("Not enough memory left (asked for more than available)\n");
+        printf("No more metadata blocks available\n");
         return NULL;
     }
 
     Memory_Block* current = free_memory_list;
+    size_t current_offset = 0;  // Track position in memory_pool
 
-    // Traverse to find a block large enough
     while (current != NULL) 
     {
         if (current->free && current->size >= size) 
         {
-            // Allocate new block from block pool
-            Memory_Block* new_block = get_new_block();
-            if (new_block == NULL) 
-            {
-                printf("Failed to allocate new block from block pool\n");
-                return NULL;
-            }
-
-            // Split block if it's big enough
+            // Split block if it's significantly larger
             if (current->size > size + sizeof(Memory_Block)) 
             {
-                new_block->size = current->size - size - sizeof(Memory_Block);
-                new_block->free = 1;
-                new_block->next = current->next;
-                current->next = new_block;
+                // Get new metadata block from md_pool
+                Memory_Block* new_md = md_pool_left;
+                md_pool_left = (Memory_Block*)((char*)md_pool_left + sizeof(Memory_Block));
+
+                // Setup new free block metadata
+                new_md->size = current->size - size;
+                new_md->free = 1;
+                new_md->next = current->next;
+
+                // Update current block
+                current->size = size;
+                current->free = 0;
+                current->next = new_md;
+            } 
+            else 
+            {
+                // Use entire block if split wouldn't be worth it
+                current->free = 0;
             }
 
-            current->size = size;
-            current->free = 0;
-
-            memory_left -= size;  // Update remaining memory pool size
-
-            return (void*)((char*)memory_pool + ((char*)current - (char*)block_pool));
+            memory_left -= size;
+            
+            // Return memory location from memory_pool
+            return (char*)memory_pool + current_offset;
         }
+
+        // Move to next block, updating offset
+        current_offset += current->size;
         current = current->next;
     }
 
-    printf("Not enough memory (couldn't find a suitable block)\n");
     return NULL;
 }
 
-// Free allocated memory
 void mem_free(void* block) 
 {
     if (block == NULL) 
@@ -121,26 +110,42 @@ void mem_free(void* block)
         return;
     }
 
-    // Get the memory block metadata associated with the block
-    Memory_Block* mem_block = (Memory_Block*)block - 1;
-    mem_block->free = 1;
-    memory_left += mem_block->size;  // Return memory to the pool
-
-    // Merge adjacent free blocks
+    // Calculate position in memory_pool
+    size_t block_offset = (char*)block - (char*)memory_pool;
+    
+    // Find corresponding metadata
     Memory_Block* current = free_memory_list;
+    size_t current_offset = 0;
+
     while (current != NULL) 
     {
-        if (current->free && current->next && current->next->free) 
+        if (current_offset == block_offset) 
         {
+            current->free = 1;
+            memory_left += current->size;
+
             // Merge adjacent free blocks
-            current->size += sizeof(Memory_Block) + current->next->size;
-            current->next = current->next->next;
+            Memory_Block* iter = free_memory_list;
+            while (iter != NULL && iter->next != NULL) 
+            {
+                if (iter->free && iter->next->free) 
+                {
+                    // Combine blocks
+                    iter->size += iter->next->size;
+                    iter->next = iter->next->next;
+                    
+                    // Return metadata block to pool
+                    md_pool_left = (Memory_Block*)((char*)md_pool_left - sizeof(Memory_Block));
+                }
+                iter = iter->next;
+            }
+            return;
         }
+        current_offset += current->size;
         current = current->next;
     }
 }
 
-// Resize allocated memory block
 void* mem_resize(void* block, size_t new_size) 
 {
     if (block == NULL) 
@@ -148,32 +153,43 @@ void* mem_resize(void* block, size_t new_size)
         return mem_alloc(new_size);
     }
 
-    Memory_Block* mem_block = (Memory_Block*)block - 1;
+    // Find the metadata block for this memory
+    Memory_Block* current = free_memory_list;
+    size_t offset = (char*)block - (char*)memory_pool;
+    size_t current_offset = 0;
 
-    if (mem_block->size >= new_size) 
+    // Find the corresponding metadata block
+    while (current != NULL) 
     {
-        return block;  // No need to resize if the block is already large enough
-    }
+        if (current_offset == offset) 
+        {
+            if (current->size >= new_size) 
+            {
+                return block; // Current block is big enough
+            }
 
-    // Allocate new memory and copy data
-    void* new_block = mem_alloc(new_size);
-    if (new_block != NULL) 
-    {
-        memcpy(new_block, block, mem_block->size);
-        mem_free(block);  // Free the old block
+            // Need to allocate new block
+            void* new_block = mem_alloc(new_size);
+            if (new_block != NULL) 
+            {
+                memcpy(new_block, block, current->size);
+                mem_free(block);
+            }
+            return new_block;
+        }
+        current_offset += current->size;
+        current = current->next;
     }
-
-    return new_block;
+    return NULL;
 }
 
-// Free everything
 void mem_deinit() 
 {
     free(memory_pool);
-    free(block_pool);
+    free(md_pool);
     memory_pool = NULL;
-    block_pool = NULL;
+    md_pool = NULL;
     free_memory_list = NULL;
     memory_left = 0;
-    block_pool_left = 0;
+    md_pool_left = NULL;
 }
