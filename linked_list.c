@@ -12,7 +12,7 @@
 // Initialize list w pointer & initialize memory pool if not already
 void list_init(Node** head, size_t node_size) {
     if (memory_pool == NULL) {  
-        size_t poolSize = node_size * 100;
+        //size_t poolSize = node_size * 100;
         mem_init(node_size);
         printf("Memory pool initialized in list_init\n");
     }
@@ -20,7 +20,7 @@ void list_init(Node** head, size_t node_size) {
 }
 
 // Insert a new node
-void list_insert(Node** head, int data) {
+void list_insert(Node** head, uint16_t data) {
     // Allocate memory for a new node
     Node* new_node = (Node*)mem_alloc(sizeof(Node));
     if (new_node == NULL) {
@@ -47,7 +47,7 @@ void list_insert(Node** head, int data) {
 }
 
 // Insert new node after a given node
-void list_insert_after(Node* prev_node, int data) {
+void list_insert_after(Node* prev_node, uint16_t data) {
     if (prev_node == NULL) {  // Ensure the previous node is not NULL
         return;
     }
@@ -65,7 +65,7 @@ void list_insert_after(Node* prev_node, int data) {
 }
 
 // Insert node before given node in list
-void list_insert_before(Node** head, Node* next_node, int data) {
+void list_insert_before(Node** head, Node* next_node, uint16_t data) {
     if (*head == NULL || next_node == NULL) {
         return;
     }
@@ -102,7 +102,7 @@ void list_insert_before(Node** head, Node* next_node, int data) {
 }
 
 // Delete node
-void list_delete(Node** head, int data) {
+void list_delete(Node** head, uint16_t data) {
     if (*head == NULL) {
         return;
     }
@@ -132,7 +132,7 @@ void list_delete(Node** head, int data) {
 }
 
 // Search by value
-Node* list_search(Node** head, int data) {
+Node* list_search(Node** head, uint16_t data) {
     Node* current = *head;
 
     while (current != NULL) {
