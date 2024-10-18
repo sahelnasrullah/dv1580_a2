@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 // Define structure for memory block metadata
 typedef struct Memory_Block 
@@ -11,17 +12,23 @@ typedef struct Memory_Block
 } Memory_Block;
 
 void* memory_pool = NULL;        
-void* md_pool = NULL;         
-Memory_Block* free_memory_list = NULL;  // Pointer to free memory blocks
 size_t memory_left = 0;          // Memory left in the memory pool
-size_t md_pool_left = 0;      // Blocks left in the block pool
+
+void* md_pool = NULL;         
+Memory_Block* md_pool_left = NULL;      // Pointer to next available metadata block
+Memory_Block* free_memory_list = NULL;  // Pointer to free memory blocks
+
+pthread_mutex_t memory_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Initialize with total size of memory pool
 void mem_init(size_t size) 
 {
+    pthread_mutex_lock(&memory_mutex);
+    
     if (size == 0) 
     {
         printf("Error: Can't initialize memory pool with size 0\n");
+        pthread_mutex_unlock(&memory_mutex);
         return;
     }
 
@@ -32,6 +39,7 @@ void mem_init(size_t size)
     if (memory_pool == NULL || md_pool == NULL) 
     {
         printf("Failed to allocate memory pool or block pool\n");
+        pthread_mutex_unlock(&memory_mutex);
         return;
     }
 
@@ -44,23 +52,31 @@ void mem_init(size_t size)
     // Set initial state
     memory_left = size;
     md_pool_left = (Memory_Block*)((char*)md_pool + sizeof(Memory_Block)); // Point to next available metadata block
+
+    pthread_mutex_unlock(&memory_mutex);
 }
 
 void* mem_alloc(size_t size) 
 {
+    pthread_mutex_lock(&memory_mutex);
+    
     if (size == 0 || memory_left < size) 
     {
+        pthread_mutex_unlock(&memory_mutex);
         return NULL;
     }
 
-    if (md_pool_left >= (Memory_Block*)((char*)md_pool + 1000 * sizeof(Memory_Block))) 
+    // Check if we've exceeded the metadata pool
+    if ((char*)md_pool_left >= ((char*)md_pool + 1000 * sizeof(Memory_Block))) 
     {
         printf("No more metadata blocks available\n");
+        pthread_mutex_unlock(&memory_mutex);
         return NULL;
     }
 
     Memory_Block* current = free_memory_list;
     size_t current_offset = 0;  // Track position in memory_pool
+    void* result = NULL;
 
     while (current != NULL) 
     {
@@ -71,7 +87,7 @@ void* mem_alloc(size_t size)
             {
                 // Get new metadata block from md_pool
                 Memory_Block* new_md = md_pool_left;
-                md_pool_left = (Memory_Block*)((char*)md_pool_left + sizeof(Memory_Block));
+                md_pool_left = (Memory_Block*)((char*)new_md + sizeof(Memory_Block));
 
                 // Setup new free block metadata
                 new_md->size = current->size - size;
@@ -90,9 +106,8 @@ void* mem_alloc(size_t size)
             }
 
             memory_left -= size;
-            
-            // Return memory location from memory_pool
-            return (char*)memory_pool + current_offset;
+            result = (char*)memory_pool + current_offset;
+            break;
         }
 
         // Move to next block, updating offset
@@ -100,7 +115,8 @@ void* mem_alloc(size_t size)
         current = current->next;
     }
 
-    return NULL;
+    pthread_mutex_unlock(&memory_mutex);
+    return result;
 }
 
 void mem_free(void* block) 
@@ -109,6 +125,8 @@ void mem_free(void* block)
     {
         return;
     }
+
+    pthread_mutex_lock(&memory_mutex);
 
     // Calculate position in memory_pool
     size_t block_offset = (char*)block - (char*)memory_pool;
@@ -134,29 +152,36 @@ void mem_free(void* block)
                     iter->size += iter->next->size;
                     iter->next = iter->next->next;
                     
-                    // Return metadata block to pool
+                    // Return metadata block to pool by moving pointer back
                     md_pool_left = (Memory_Block*)((char*)md_pool_left - sizeof(Memory_Block));
                 }
                 iter = iter->next;
             }
-            return;
+            break;
         }
         current_offset += current->size;
         current = current->next;
     }
+
+    pthread_mutex_unlock(&memory_mutex);
 }
 
 void* mem_resize(void* block, size_t new_size) 
 {
+    pthread_mutex_lock(&memory_mutex);
+
     if (block == NULL) 
     {
-        return mem_alloc(new_size);
+        void* result = mem_alloc(new_size);
+        pthread_mutex_unlock(&memory_mutex);
+        return result;
     }
 
     // Find the metadata block for this memory
     Memory_Block* current = free_memory_list;
     size_t offset = (char*)block - (char*)memory_pool;
     size_t current_offset = 0;
+    void* result = NULL;
 
     // Find the corresponding metadata block
     while (current != NULL) 
@@ -165,7 +190,8 @@ void* mem_resize(void* block, size_t new_size)
         {
             if (current->size >= new_size) 
             {
-                return block; // Current block is big enough
+                result = block; // Current block is big enough
+                break;
             }
 
             // Need to allocate new block
@@ -174,17 +200,22 @@ void* mem_resize(void* block, size_t new_size)
             {
                 memcpy(new_block, block, current->size);
                 mem_free(block);
+                result = new_block;
             }
-            return new_block;
+            break;
         }
         current_offset += current->size;
         current = current->next;
     }
-    return NULL;
+
+    pthread_mutex_unlock(&memory_mutex);
+    return result;
 }
 
 void mem_deinit() 
 {
+    pthread_mutex_lock(&memory_mutex);
+    
     free(memory_pool);
     free(md_pool);
     memory_pool = NULL;
@@ -192,4 +223,7 @@ void mem_deinit()
     free_memory_list = NULL;
     memory_left = 0;
     md_pool_left = NULL;
+
+    pthread_mutex_unlock(&memory_mutex);
+    pthread_mutex_destroy(&memory_mutex);
 }
