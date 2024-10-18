@@ -3,6 +3,17 @@
 
 #include <stddef.h> // For size_t
 
+typedef struct 
+{
+    size_t size;
+    int free;  
+    struct Memory_Block* next;
+} Memory_Block;
+
+extern void* memory_pool;
+extern Memory_Block* free_memory_array;
+extern size_t memory_left;
+
 // Helps C++ compilers to handle C header files
 #ifdef __cplusplus
 extern "C"
