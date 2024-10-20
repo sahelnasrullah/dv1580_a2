@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <stdbool.h>
 
 // Define structure for memory block metadata
 typedef struct Memory_Block 
@@ -34,7 +35,7 @@ void mem_init(size_t size)
 
     // Allocate memory pools
     memory_pool = malloc(size);
-    md_pool = malloc(1000 * sizeof(Memory_Block));
+    md_pool = malloc(size);
     
     if (memory_pool == NULL || md_pool == NULL) 
     {
@@ -60,13 +61,24 @@ void* mem_alloc(size_t size)
 {
     pthread_mutex_lock(&memory_mutex);
     
-    if (size == 0 || memory_left < size) 
+    // Initial validation checks
+    if (size == 0) 
     {
         pthread_mutex_unlock(&memory_mutex);
         return NULL;
     }
 
-    // Check if we've exceeded the metadata pool
+    // Track total allocated memory across all threads
+    static size_t total_allocated = 0;
+    
+    // Check if this allocation would exceed total memory or available memory
+    if (total_allocated + size > memory_pool || memory_left < size) 
+    {
+        pthread_mutex_unlock(&memory_mutex);
+        return NULL;
+    }
+
+    // Check metadata pool availability
     if ((char*)md_pool_left >= ((char*)md_pool + 1000 * sizeof(Memory_Block))) 
     {
         printf("No more metadata blocks available\n");
@@ -75,19 +87,60 @@ void* mem_alloc(size_t size)
     }
 
     Memory_Block* current = free_memory_list;
-    size_t current_offset = 0;  // Track position in memory_pool
+    size_t current_offset = 0;
     void* result = NULL;
+    bool found_suitable_block = false;
 
+    // Verify total available contiguous memory
+    size_t largest_free_block = 0;
+    Memory_Block* temp = free_memory_list;
+    while (temp != NULL) {
+        if (temp->free && temp->size > largest_free_block) {
+            largest_free_block = temp->size;
+        }
+        temp = temp->next;
+    }
+
+    // If no block is large enough, fail fast
+    if (largest_free_block < size) {
+        pthread_mutex_unlock(&memory_mutex);
+        return NULL;
+    }
+
+    // Search for suitable block
     while (current != NULL) 
     {
+        // Check if we're still within memory pool bounds
+        if (current_offset >= memory_pool) 
+        {
+            pthread_mutex_unlock(&memory_mutex);
+            return NULL;
+        }
+
         if (current->free && current->size >= size) 
         {
+            found_suitable_block = true;
+
+            // Verify this allocation won't exceed memory pool
+            if (current_offset + size > memory_pool) 
+            {
+                pthread_mutex_unlock(&memory_mutex);
+                return NULL;
+            }
+
             // Split block if it's significantly larger
             if (current->size > size + sizeof(Memory_Block)) 
             {
-                // Get new metadata block from md_pool
+                // Get new metadata block
                 Memory_Block* new_md = md_pool_left;
                 md_pool_left = (Memory_Block*)((char*)new_md + sizeof(Memory_Block));
+
+                // Ensure metadata pointers are valid
+                if (!new_md || !current)
+                {
+                    pthread_mutex_unlock(&memory_mutex);
+                    return NULL;
+                }
 
                 // Setup new free block metadata
                 new_md->size = current->size - size;
@@ -106,13 +159,21 @@ void* mem_alloc(size_t size)
             }
 
             memory_left -= size;
+            total_allocated += size;  // Update total allocated memory
             result = (char*)memory_pool + current_offset;
             break;
         }
 
-        // Move to next block, updating offset
+        // Move to next block
         current_offset += current->size;
         current = current->next;
+    }
+
+    // If no suitable block found, return NULL
+    if (!found_suitable_block) 
+    {
+        pthread_mutex_unlock(&memory_mutex);
+        return NULL;
     }
 
     pthread_mutex_unlock(&memory_mutex);
@@ -148,6 +209,14 @@ void mem_free(void* block)
             {
                 if (iter->free && iter->next->free) 
                 {
+                    // Ensure the iter and next pointers are valid before merging
+                    if (!iter || !iter->next)
+                    {
+                        printf("Error: Invalid memory block pointer during merge in mem_free.\n");
+                        pthread_mutex_unlock(&memory_mutex);
+                        return;
+                    }
+
                     // Combine blocks
                     iter->size += iter->next->size;
                     iter->next = iter->next->next;
@@ -189,44 +258,30 @@ void* mem_resize(void* block, size_t new_size)
     {
         if (current_offset == offset) 
         {
-            size_t available_size = current->size;
-            Memory_Block* next = current->next;
-
-            // Check if merging with the previous block is possible
-            if (prev && prev->free) 
+            // Ensure current and prev pointers are valid
+            if (!current || (prev && !prev->next))
             {
-                available_size += prev->size;
+                printf("Error: Invalid memory block pointer in mem_resize.\n");
+                pthread_mutex_unlock(&memory_mutex);
+                return NULL;
             }
 
-            // Check if merging with the next block is possible
-            if (next && next->free) 
+            // Current block is big enough
+            if (current->size >= new_size) 
             {
-                available_size += next->size;
-            }
-
-            // If we have enough space after merging
-            if (available_size >= new_size) 
-            {
-                // Merge with previous if necessary
-                if (prev && prev->free && current->size < new_size) 
-                {
-                    prev->size += current->size;
-                    prev->next = current->next;
-                    memmove((char*)prev + sizeof(Memory_Block), block, current->size);
-                    current = prev;
-                }
-
-                // Merge with next if necessary
-                if (next && next->free && current->size < new_size) 
-                {
-                    current->size += next->size;
-                    current->next = next->next;
-                }
-
-                // Split the block if it's too large
+                // Split block if it's significantly larger
                 if (current->size > new_size + sizeof(Memory_Block)) 
                 {
                     Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
+
+                    // Ensure new_block pointer is valid
+                    if (!new_block)
+                    {
+                        printf("Error: Invalid new_block pointer in mem_resize.\n");
+                        pthread_mutex_unlock(&memory_mutex);
+                        return NULL;
+                    }
+
                     new_block->size = current->size - new_size;
                     new_block->free = 1;
                     new_block->next = current->next;
@@ -234,19 +289,49 @@ void* mem_resize(void* block, size_t new_size)
                     current->size = new_size;
                     current->next = new_block;
                 }
-
-                result = (char*)current + sizeof(Memory_Block);
+                result = block;
+                break;
             }
-            else 
+            
+            // Check if merging with the next block is possible and sufficient
+            if (current->next && current->next->free && 
+                (current->size + current->next->size >= new_size)) 
             {
-                // If we can't resize in place, allocate a new block and copy
-                void* new_block = mem_alloc(new_size);
-                if (new_block != NULL) 
+                // Merge with next block
+                current->size += current->next->size;
+                current->next = current->next->next;
+                
+                // If the merged block is significantly larger, split it
+                if (current->size > new_size + sizeof(Memory_Block)) 
                 {
-                    memcpy(new_block, block, current->size);
-                    mem_free(block);
-                    result = new_block;
+                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
+
+                    // Ensure new_block pointer is valid
+                    if (!new_block)
+                    {
+                        printf("Error: Invalid new_block pointer after merging in mem_resize.\n");
+                        pthread_mutex_unlock(&memory_mutex);
+                        return NULL;
+                    }
+
+                    new_block->size = current->size - new_size;
+                    new_block->free = 1;
+                    new_block->next = current->next;
+                    
+                    current->size = new_size;
+                    current->next = new_block;
                 }
+                result = block;
+                break;
+            }
+
+            // If we can't resize in place, allocate a new block and copy
+            void* new_block = mem_alloc(new_size);
+            if (new_block != NULL) 
+            {
+                memcpy(new_block, block, current->size);
+                mem_free(block);
+                result = new_block;
             }
             break;
         }
