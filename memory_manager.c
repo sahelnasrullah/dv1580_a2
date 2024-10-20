@@ -179,6 +179,60 @@ void* mem_alloc(size_t size)
     return result;
 }
 
+// void mem_free(void* block) 
+// {
+//     if (block == NULL) 
+//     {
+//         return;
+//     }
+
+//     pthread_mutex_lock(&memory_mutex);
+
+//     // Calculate position in memory_pool
+//     size_t block_offset = (char*)block - (char*)memory_pool;
+    
+//     // Find corresponding metadata
+//     Memory_Block* current = free_memory_list;
+//     size_t current_offset = 0;
+
+//     while (current != NULL) 
+//     {
+//         if (current_offset == block_offset) 
+//         {
+//             current->free = 1;
+//             memory_left += current->size;
+
+//             // Merge adjacent free blocks
+//             Memory_Block* iter = free_memory_list;
+//             while (iter != NULL && iter->next != NULL) 
+//             {
+//                 if (iter->free && iter->next->free) 
+//                 {
+//                     // Ensure the iter and next pointers are valid before merging
+//                     if (!iter || !iter->next)
+//                     {
+//                         printf("Error: Invalid memory block pointer during merge in mem_free.\n");
+//                         pthread_mutex_unlock(&memory_mutex);
+//                         return;
+//                     }
+
+//                     // Combine blocks
+//                     iter->size += iter->next->size;
+//                     iter->next = iter->next->next;
+                    
+//                     // Return metadata block to pool by moving pointer back
+//                     md_pool_left = (Memory_Block*)((char*)md_pool_left - sizeof(Memory_Block));
+//                 }
+//                 iter = iter->next;
+//             }
+//             break;
+//         }
+//         current_offset += current->size;
+//         current = current->next;
+//     }
+
+//     pthread_mutex_unlock(&memory_mutex);
+// }
 void mem_free(void* block) 
 {
     if (block == NULL) 
@@ -199,31 +253,25 @@ void mem_free(void* block)
     {
         if (current_offset == block_offset) 
         {
-            current->free = 1;
-            memory_left += current->size;
+            if (!current->free) {  // Only update if block wasn't already free
+                current->free = 1;
+                memory_left += current->size;  // Return memory to available pool
 
-            // Merge adjacent free blocks
-            Memory_Block* iter = free_memory_list;
-            while (iter != NULL && iter->next != NULL) 
-            {
-                if (iter->free && iter->next->free) 
+                // Merge adjacent free blocks
+                Memory_Block* iter = free_memory_list;
+                while (iter != NULL && iter->next != NULL) 
                 {
-                    // Ensure the iter and next pointers are valid before merging
-                    if (!iter || !iter->next)
+                    if (iter->free && iter->next->free) 
                     {
-                        printf("Error: Invalid memory block pointer during merge in mem_free.\n");
-                        pthread_mutex_unlock(&memory_mutex);
-                        return;
+                        // Combine blocks
+                        iter->size += iter->next->size;
+                        iter->next = iter->next->next;
+                        
+                        // Return metadata block to pool
+                        md_pool_left = (Memory_Block*)((char*)md_pool_left - sizeof(Memory_Block));
                     }
-
-                    // Combine blocks
-                    iter->size += iter->next->size;
-                    iter->next = iter->next->next;
-                    
-                    // Return metadata block to pool by moving pointer back
-                    md_pool_left = (Memory_Block*)((char*)md_pool_left - sizeof(Memory_Block));
+                    iter = iter->next;
                 }
-                iter = iter->next;
             }
             break;
         }
