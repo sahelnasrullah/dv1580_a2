@@ -110,7 +110,7 @@ void* mem_alloc(size_t size)
     while (current != NULL) 
     {
         // Check if we're still within memory pool bounds
-        if (current_offset >= memory_left) 
+        if (current_offset >= memory_pool) 
         {
             pthread_mutex_unlock(&memory_mutex);
             return NULL;
@@ -158,6 +158,7 @@ void* mem_alloc(size_t size)
             }
 
             memory_left -= size;
+            // total_allocated += size;  // Update total allocated memory
             pthread_mutex_lock(&memory_mutex);
             total_allocated += size;
             pthread_mutex_unlock(&memory_mutex);
