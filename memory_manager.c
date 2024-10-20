@@ -64,8 +64,7 @@ void* mem_alloc(size_t size)
     // Initial validation checks
     if (size == 0) 
     {
-        pthread_mutex_unlock(&memory_mutex);
-        return NULL;
+        size = sizeof(Memory_Block); // Allocate minimum usable size
     }
 
     // Track total allocated memory across all threads
