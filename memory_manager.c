@@ -179,6 +179,7 @@ void* mem_resize(void* block, size_t new_size)
 
     // Find the metadata block for this memory
     Memory_Block* current = free_memory_list;
+    Memory_Block* prev = NULL;
     size_t offset = (char*)block - (char*)memory_pool;
     size_t current_offset = 0;
     void* result = NULL;
@@ -188,58 +189,69 @@ void* mem_resize(void* block, size_t new_size)
     {
         if (current_offset == offset) 
         {
-            // Current block is big enough
-            if (current->size >= new_size) 
+            size_t available_size = current->size;
+            Memory_Block* next = current->next;
+
+            // Check if merging with the previous block is possible
+            if (prev && prev->free) 
             {
-                // If the current block is significantly larger, split it
-                if (current->size > new_size + sizeof(Memory_Block)) 
-                {
-                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
-                    new_block->size = current->size - new_size;
-                    new_block->free = 1;
-                    new_block->next = current->next;
-                    
-                    current->size = new_size;
-                    current->next = new_block;
-                }
-                result = block;
-                break;
-            }
-            
-            // Check if merging with the next block is possible and sufficient
-            if (current->next && current->next->free && 
-                (current->size + current->next->size >= new_size)) 
-            {
-                // Merge with next block
-                current->size += current->next->size;
-                current->next = current->next->next;
-                
-                // If the merged block is significantly larger, split it
-                if (current->size > new_size + sizeof(Memory_Block)) 
-                {
-                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
-                    new_block->size = current->size - new_size;
-                    new_block->free = 1;
-                    new_block->next = current->next;
-                    
-                    current->size = new_size;
-                    current->next = new_block;
-                }
-                result = block;
-                break;
+                available_size += prev->size;
             }
 
-            // If we can't resize in place, allocate a new block and copy
-            void* new_block = mem_alloc(new_size);
-            if (new_block != NULL) 
+            // Check if merging with the next block is possible
+            if (next && next->free) 
             {
-                memcpy(new_block, block, current->size);
-                mem_free(block);
-                result = new_block;
+                available_size += next->size;
+            }
+
+            // If we have enough space after merging
+            if (available_size >= new_size) 
+            {
+                // Merge with previous if necessary
+                if (prev && prev->free && current->size < new_size) 
+                {
+                    prev->size += current->size;
+                    prev->next = current->next;
+                    memmove((char*)prev + sizeof(Memory_Block), block, current->size);
+                    current = prev;
+                }
+
+                // Merge with next if necessary
+                if (next && next->free && current->size < new_size) 
+                {
+                    current->size += next->size;
+                    current->next = next->next;
+                }
+
+                // Split the block if it's too large
+                if (current->size > new_size + sizeof(Memory_Block)) 
+                {
+                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
+                    new_block->size = current->size - new_size;
+                    new_block->free = 1;
+                    new_block->next = current->next;
+                    
+                    current->size = new_size;
+                    current->next = new_block;
+                }
+
+                result = (char*)current + sizeof(Memory_Block);
+            }
+            else 
+            {
+                // If we can't resize in place, allocate a new block and copy
+                void* new_block = mem_alloc(new_size);
+                if (new_block != NULL) 
+                {
+                    memcpy(new_block, block, current->size);
+                    mem_free(block);
+                    result = new_block;
+                }
             }
             break;
         }
         current_offset += current->size;
+        prev = current;
         current = current->next;
     }
 
