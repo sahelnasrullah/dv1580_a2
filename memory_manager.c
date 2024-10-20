@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+//#include <pthread.h>
 
 // Define structure for memory block metadata
 typedef struct Memory_Block 
@@ -18,17 +18,17 @@ void* md_pool = NULL;
 Memory_Block* md_pool_left = NULL;      // Pointer to next available metadata block
 Memory_Block* free_memory_list = NULL;  // Pointer to free memory blocks
 
-pthread_mutex_t memory_mutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t memory_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 // Initialize with total size of memory pool
 void mem_init(size_t size) 
 {
-    pthread_mutex_lock(&memory_mutex);
+    //pthread_mutex_lock(&memory_mutex);
     
     if (size == 0) 
     {
         printf("Error: Can't initialize memory pool with size 0\n");
-        pthread_mutex_unlock(&memory_mutex);
+        //pthread_mutex_unlock(&memory_mutex);
         return;
     }
 
@@ -39,7 +39,7 @@ void mem_init(size_t size)
     if (memory_pool == NULL || md_pool == NULL) 
     {
         printf("Failed to allocate memory pool or block pool\n");
-        pthread_mutex_unlock(&memory_mutex);
+        //pthread_mutex_unlock(&memory_mutex);
         return;
     }
 
@@ -53,16 +53,16 @@ void mem_init(size_t size)
     memory_left = size;
     md_pool_left = (Memory_Block*)((char*)md_pool + sizeof(Memory_Block)); // Point to next available metadata block
 
-    pthread_mutex_unlock(&memory_mutex);
+    //pthread_mutex_unlock(&memory_mutex);
 }
 
 void* mem_alloc(size_t size) 
 {
-    pthread_mutex_lock(&memory_mutex);
+    //pthread_mutex_lock(&memory_mutex);
     
     if (size == 0 || memory_left < size) 
     {
-        pthread_mutex_unlock(&memory_mutex);
+        //pthread_mutex_unlock(&memory_mutex);
         return NULL;
     }
 
@@ -70,7 +70,7 @@ void* mem_alloc(size_t size)
     if ((char*)md_pool_left >= ((char*)md_pool + 1000 * sizeof(Memory_Block))) 
     {
         printf("No more metadata blocks available\n");
-        pthread_mutex_unlock(&memory_mutex);
+        //pthread_mutex_unlock(&memory_mutex);
         return NULL;
     }
 
@@ -115,7 +115,7 @@ void* mem_alloc(size_t size)
         current = current->next;
     }
 
-    pthread_mutex_unlock(&memory_mutex);
+    //pthread_mutex_unlock(&memory_mutex);
     return result;
 }
 
@@ -126,7 +126,7 @@ void mem_free(void* block)
         return;
     }
 
-    pthread_mutex_lock(&memory_mutex);
+    //pthread_mutex_lock(&memory_mutex);
 
     // Calculate position in memory_pool
     size_t block_offset = (char*)block - (char*)memory_pool;
@@ -163,17 +163,17 @@ void mem_free(void* block)
         current = current->next;
     }
 
-    pthread_mutex_unlock(&memory_mutex);
+    //pthread_mutex_unlock(&memory_mutex);
 }
 
 void* mem_resize(void* block, size_t new_size) 
 {
-    pthread_mutex_lock(&memory_mutex);
+    //pthread_mutex_lock(&memory_mutex);
 
     if (block == NULL) 
     {
         void* result = mem_alloc(new_size);
-        pthread_mutex_unlock(&memory_mutex);
+        //        pthread_mutex_unlock(&memory_mutex);
         return result;
     }
 
@@ -188,13 +188,48 @@ void* mem_resize(void* block, size_t new_size)
     {
         if (current_offset == offset) 
         {
+            // Current block is big enough
             if (current->size >= new_size) 
             {
-                result = block; // Current block is big enough
+                // If the current block is significantly larger, split it
+                if (current->size > new_size + sizeof(Memory_Block)) 
+                {
+                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
+                    new_block->size = current->size - new_size;
+                    new_block->free = 1;
+                    new_block->next = current->next;
+                    
+                    current->size = new_size;
+                    current->next = new_block;
+                }
+                result = block;
+                break;
+            }
+            
+            // Check if merging with the next block is possible and sufficient
+            if (current->next && current->next->free && 
+                (current->size + current->next->size >= new_size)) 
+            {
+                // Merge with next block
+                current->size += current->next->size;
+                current->next = current->next->next;
+                
+                // If the merged block is significantly larger, split it
+                if (current->size > new_size + sizeof(Memory_Block)) 
+                {
+                    Memory_Block* new_block = (Memory_Block*)((char*)current + new_size);
+                    new_block->size = current->size - new_size;
+                    new_block->free = 1;
+                    new_block->next = current->next;
+                    
+                    current->size = new_size;
+                    current->next = new_block;
+                }
+                result = block;
                 break;
             }
 
-            // Need to allocate new block
+            // If we can't resize in place, allocate a new block and copy
             void* new_block = mem_alloc(new_size);
             if (new_block != NULL) 
             {
@@ -208,13 +243,13 @@ void* mem_resize(void* block, size_t new_size)
         current = current->next;
     }
 
-    pthread_mutex_unlock(&memory_mutex);
+    //pthread_mutex_unlock(&memory_mutex);
     return result;
 }
 
 void mem_deinit() 
 {
-    pthread_mutex_lock(&memory_mutex);
+    //pthread_mutex_lock(&memory_mutex);
     
     free(memory_pool);
     free(md_pool);
@@ -224,6 +259,6 @@ void mem_deinit()
     memory_left = 0;
     md_pool_left = NULL;
 
-    pthread_mutex_unlock(&memory_mutex);
-    pthread_mutex_destroy(&memory_mutex);
+    //pthread_mutex_unlock(&memory_mutex);
+    //pthread_mutex_destroy(&memory_mutex);
 }
