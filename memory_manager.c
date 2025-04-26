@@ -38,13 +38,13 @@ void mem_init(size_t size) {
 
 void* mem_alloc(size_t size) 
 {
-    if (size == 0) size = 1;
+    if (size == 0) size = 1; 
 
     pthread_mutex_lock(&memory_mutex);
 
     if (total_memory_allocated + size > memory_pool_size) {
         pthread_mutex_unlock(&memory_mutex);
-        return NULL;
+        return NULL; 
     }
 
     Memory_Block* current = block_pool;
@@ -55,10 +55,12 @@ void* mem_alloc(size_t size)
         {
             if (current->size == size) {
                 current->free = false;
-                total_memory_allocated += size; 
+                total_memory_allocated += size;
+
                 pthread_mutex_unlock(&memory_mutex);
                 return current->pnt;
             }
+
 
             Memory_Block* new_block = malloc(sizeof(Memory_Block));
             if (new_block == NULL) {
@@ -76,7 +78,7 @@ void* mem_alloc(size_t size)
             current->free = false;
             current->next = new_block;
 
-            total_memory_allocated += size; 
+            total_memory_allocated += size;
 
             pthread_mutex_unlock(&memory_mutex);
             return current->pnt;
@@ -94,9 +96,10 @@ void mem_free(void* block) {
         printf("Nothing to free\n");
         return;
     }
+
     pthread_mutex_lock(&memory_mutex);
 
-    Memory_Block * current = block_pool;
+    Memory_Block *current = block_pool;
     while (current != NULL) 
     {
         if (current->pnt == block) {
@@ -105,19 +108,24 @@ void mem_free(void* block) {
             }
             current->free = true;
 
-            Memory_Block* next_block = current->next;
-            if (next_block != NULL && next_block->free) {
+            // Merge with next free block if possible
+            while (current->next != NULL && current->next->free) {
+                Memory_Block* next_block = current->next;
+
                 current->size += next_block->size;
                 current->next = next_block->next;
+
                 free(next_block);
             }
+
             pthread_mutex_unlock(&memory_mutex);
             return;
-        } 
+        }
         else {
             current = current->next;
         }
     }
+
     pthread_mutex_unlock(&memory_mutex);
 }
 
