@@ -38,14 +38,9 @@ void mem_init(size_t size) {
 
 void* mem_alloc(size_t size) 
 {
-    if (size == 0) size = 1; 
+    if (size == 0) size = 1;
 
     pthread_mutex_lock(&memory_mutex);
-
-    if (total_memory_allocated + size > memory_pool_size) {
-        pthread_mutex_unlock(&memory_mutex);
-        return NULL; 
-    }
 
     Memory_Block* current = block_pool;
 
@@ -56,11 +51,9 @@ void* mem_alloc(size_t size)
             if (current->size == size) {
                 current->free = false;
                 total_memory_allocated += size;
-
                 pthread_mutex_unlock(&memory_mutex);
                 return current->pnt;
             }
-
 
             Memory_Block* new_block = malloc(sizeof(Memory_Block));
             if (new_block == NULL) {
