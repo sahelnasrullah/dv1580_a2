@@ -53,35 +53,33 @@ void* mem_alloc(size_t size)
     {
         if (current->free && current->size >= size)
         {
-            if (current->size == size) {
+            if (current->size >= size + sizeof(Memory_Block)) {
+                // Splitta blocket
+                Memory_Block* new_block = (Memory_Block*)((char*)current->pnt + size);
+
+                new_block->pnt = (char*)current->pnt + size + sizeof(Memory_Block);
+                new_block->size = current->size - size - sizeof(Memory_Block);
+                new_block->free = true;
+                new_block->next = current->next;
+
+                current->size = size;
                 current->free = false;
-                total_memory_allocated += size; 
+                current->next = new_block;
+
+                total_memory_allocated += size;
+
+                pthread_mutex_unlock(&memory_mutex);
+                return current->pnt;
+            } 
+            else {
+                // Inte tillräcklig plats för split, ta hela blocket
+                current->free = false;
+                total_memory_allocated += current->size;
+
                 pthread_mutex_unlock(&memory_mutex);
                 return current->pnt;
             }
-
-            Memory_Block* new_block = malloc(sizeof(Memory_Block));
-            if (new_block == NULL) {
-                pthread_mutex_unlock(&memory_mutex);
-                printf("No block allocated\n");
-                return NULL;
-            }
-
-            new_block->pnt = (char*)current->pnt + size;
-            new_block->size = current->size - size;
-            new_block->free = true;
-            new_block->next = current->next;
-
-            current->size = size;
-            current->free = false;
-            current->next = new_block;
-
-            total_memory_allocated += size; 
-
-            pthread_mutex_unlock(&memory_mutex);
-            return current->pnt;
         }
-
         current = current->next;
     }
 
