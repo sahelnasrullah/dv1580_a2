@@ -7,219 +7,212 @@
 #include <stdint.h>
 #include <pthread.h>
 
+// Synchronization primitives for thread safety.
+pthread_rwlock_t list_rwlock = PTHREAD_RWLOCK_INITIALIZER; // Read-Write lock for read-heavy functions.
+pthread_mutex_t list_mutex = PTHREAD_MUTEX_INITIALIZER;    // Mutex lock for write-heavy functions.
 
 
-// Initialize list w pointer & initialize memory pool if not already
-void list_init(Node** head, size_t node_size) {
-    if (memory_pool == NULL) {  
-        //size_t poolSize = node_size * 100;
-        mem_init(node_size);
-        printf("Memory pool initialized in list_init\n");
-    }
-    *head = NULL;  // Initialize the head of the list to NULL
+void list_init(Node** head, size_t size) {
+    *head = NULL;
+    mem_init(size);
 }
 
-// Insert a new node
 void list_insert(Node** head, uint16_t data) {
-    // Allocate memory for a new node
+    pthread_mutex_lock(&list_mutex); 
+
     Node* new_node = (Node*)mem_alloc(sizeof(Node));
-    if (new_node == NULL) {
-        printf("Failed to allocate memory for new node (list_insert)\n");
+    if (!new_node) {
+        printf("Memory allocation failed\n");
+        pthread_mutex_unlock(&list_mutex); 
         return;
     }
 
     new_node->data = data;
     new_node->next = NULL;
 
-    if (*head == NULL) 
-    {
+    if (*head == NULL) {
         *head = new_node;
-    } 
-    else 
-    {
+    } else {
         Node* current = *head;
-        while (current->next != NULL) 
-        {
+        while (current->next != NULL) {
             current = current->next;
         }
-        current->next = new_node;  // Link the new node at the end of the list
+        current->next = new_node;
     }
+
+    pthread_mutex_unlock(&list_mutex); 
 }
 
-// Insert new node after a given node
 void list_insert_after(Node* prev_node, uint16_t data) {
-    if (prev_node == NULL) {  // Ensure the previous node is not NULL
+    if (prev_node == NULL) {
+        printf("Previous node cannot be NULL\n");
         return;
     }
 
-    // Allocate memory new node
+    pthread_mutex_lock(&list_mutex);
+
     Node* new_node = (Node*)mem_alloc(sizeof(Node));
-    if (new_node == NULL) {
-        printf("Failed to allocate memory for new node (list_insert_after)\n");
+    if (!new_node) {
+        printf("Memory allocation failed\n");
+        pthread_mutex_unlock(&list_mutex); 
         return;
     }
 
     new_node->data = data;
     new_node->next = prev_node->next;
     prev_node->next = new_node;
+
+    pthread_mutex_unlock(&list_mutex);
 }
 
-// Insert node before given node in list
 void list_insert_before(Node** head, Node* next_node, uint16_t data) {
-    if (*head == NULL || next_node == NULL) {
+    if (next_node == NULL) {
+        printf("Next node cannot be NULL\n");
         return;
     }
 
-    if (*head == next_node) { 
-        Node* new_node = (Node*)mem_alloc(sizeof(Node));
-        if (new_node == NULL) {
-            printf("Failed to allocate memory for new node (list_insert_before)\n");
-            return;
-        }
-        new_node->data = data;
-        new_node->next = *head;  // Link new node to current head
-        *head = new_node;  // Update pointer
+    pthread_mutex_lock(&list_mutex); 
+
+    Node* new_node = (Node*)mem_alloc(sizeof(Node));
+    if (!new_node) {
+        printf("Memory allocation failed\n");
+        pthread_mutex_unlock(&list_mutex);
         return;
     }
+    new_node->data = data;
 
-    // Traverse, find the node before the next_node
-    Node* current = *head;
-    while (current != NULL && current->next != next_node) {
-        current = current->next;
-    }
+    if (*head == next_node) {
+        new_node->next = *head;
+        *head = new_node;
+    } else {
+        Node* current = *head;
+        while (current != NULL && current->next != next_node) {
+            current = current->next;
+        }
 
-    if (current != NULL) {
-        Node* new_node = (Node*)mem_alloc(sizeof(Node));
-        if (new_node == NULL) {
-            printf("Failed to allocate memory for new node (list_insert_before)\n");
+        if (current == NULL) {
+            printf("The specified next node is not in the list\n");
+            mem_free(new_node);
+            pthread_mutex_unlock(&list_mutex);
             return;
         }
 
-        new_node->data = data;
         new_node->next = next_node;
         current->next = new_node;
     }
+
+    pthread_mutex_unlock(&list_mutex); 
 }
 
-// Delete node
 void list_delete(Node** head, uint16_t data) {
+    pthread_mutex_lock(&list_mutex); 
+
     if (*head == NULL) {
+        printf("List is empty\n");
+        pthread_mutex_unlock(&list_mutex);
         return;
     }
 
     Node* current = *head;
-    Node* prev = NULL;
+    Node* previous = NULL;
 
-    // Delete head
-    if (current != NULL && current->data == data) {
-        *head = current->next;  // Update the head pointer to the next node
-        mem_free(current);  // Free the memory of the deleted node
-        return;
-    }
-
-    // Find data to delete
     while (current != NULL && current->data != data) {
-        prev = current;
+        previous = current;
         current = current->next;
     }
 
-    if (current == NULL) { 
+    if (current == NULL) {
+        printf("Data not found in the list\n");
+        pthread_mutex_unlock(&list_mutex); 
         return;
     }
 
-    prev->next = current->next;  // Remove node from lsit
-    mem_free(current);  // Free memory of deleted node
+    if (previous == NULL) {
+        *head = current->next;
+    } else {
+        previous->next = current->next;
+    }
+
+    mem_free(current);
+
+    pthread_mutex_unlock(&list_mutex); 
 }
 
-// Search by value
 Node* list_search(Node** head, uint16_t data) {
-    Node* current = *head;
+    pthread_rwlock_rdlock(&list_rwlock);
 
+    Node* current = *head;
     while (current != NULL) {
         if (current->data == data) {
+            pthread_rwlock_unlock(&list_rwlock);
             return current;
         }
-
         current = current->next;
     }
+
+    pthread_rwlock_unlock(&list_rwlock);
     return NULL;
 }
 
-// Display list
 void list_display(Node** head) {
-    if (*head == NULL) {
-        printf("[]\n");
-        return;
-    }
+    pthread_rwlock_rdlock(&list_rwlock);
 
     Node* current = *head;
     printf("[");
-
-    // Traverse & print each node data
     while (current != NULL) {
-        printf("%d", current->data);
-        
+        printf("%u", current->data);
         if (current->next != NULL) {
             printf(", ");
         }
         current = current->next;
     }
-    printf("]\n");
-}
-
-// Display nodes from start to end
-void list_display_range(Node** head, Node* start_node, Node* end_node) {
-    if (*head == NULL) {
-        printf("[]");
-        return;
-    }
-
-    // If start_node is not provided, start from the head
-    Node* current = *head;
-    if (start_node != NULL) {
-    current = start_node;
-}
-    printf("[");
-    
-    // Traverse list & print each node
-    while (current != NULL) {
-        printf("%d", current->data);
-        
-        if (current == end_node) {
-            break;
-        }
-        
-        if (current->next != NULL) {
-            printf(", ");
-        }
-        
-        current = current->next;
-    }
-    
     printf("]");
+
+    pthread_rwlock_unlock(&list_rwlock);
 }
 
-// Count number of nodes
-int list_count_nodes(Node** head) {
-    int node_counter = 0;
-    Node* current = *head;
+void list_display_range(Node** head, Node* start_node, Node* end_node) {
+    pthread_rwlock_rdlock(&list_rwlock);
 
-    while (current != NULL) {
-        node_counter++;
+    Node* current = start_node ? start_node : *head;
+    printf("[");
+    while (current != NULL && (end_node == NULL || current != end_node->next)) {
+        printf("%u", current->data);
+        if (current->next != NULL && current != end_node) {
+            printf(", ");
+        }
         current = current->next;
     }
-    return node_counter;
+    printf("]");
+
+    pthread_rwlock_unlock(&list_rwlock); 
 }
 
-// Clean and free all nodes
-void list_cleanup(Node** head) {
-    Node* current = *head;
+int list_count_nodes(Node** head) {
+    pthread_rwlock_rdlock(&list_rwlock);
 
-    // free each node
+    int count = 0;
+    Node* current = *head;
     while (current != NULL) {
-        Node* next = current->next;
-        mem_free(current);
-        current = next;
+        count++;
+        current = current->next;
     }
-    *head = NULL;  // Pointer set to NULL
+
+    pthread_rwlock_unlock(&list_rwlock);
+    return count;
+}
+
+void list_cleanup(Node** head) {
+    pthread_mutex_lock(&list_mutex);
+
+    Node* current = *head;
+    while (current != NULL) {
+        Node* next_node = current->next;
+        mem_free(current);
+        current = next_node;
+    }
+    *head = NULL;
+    mem_deinit();
+
+    pthread_mutex_unlock(&list_mutex);
 }
