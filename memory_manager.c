@@ -38,7 +38,6 @@ void mem_init(size_t size) {
 
 void* mem_alloc(size_t size) 
 {
-    if (size == 0) size = 1;
 
     pthread_mutex_lock(&memory_mutex);
 
